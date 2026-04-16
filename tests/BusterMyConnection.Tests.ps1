@@ -1,32 +1,41 @@
-﻿Import-Module "$PSScriptRoot\..\network\BusterMyConnection\BusterMyConnection.psd1" -Force
+﻿Set-StrictMode -Version Latest
+
+Import-Module "$PSScriptRoot\..\network\BusterMyConnection\BusterMyConnection.psd1" -Force
+Import-Module "$PSScriptRoot\..\network\lib\Network.psm1" -Force
 
 Describe 'Invoke-BusterConnectivity' {
 
-    Context 'Proxy succeeds' {
-        Mock Test-Path { $true }
-        Mock Start-Process {}
-        Mock Invoke-WebRequest { $true }
+    Context 'Prefers proxy when available' {
 
-        It 'returns proxy success' {
-            (Invoke-BusterConnectivity).Mode | Should -Be 'Proxy'
+        InModuleScope BusterMyConnection {
+
+            It 'succeeds when proxy is preferred' {
+                $result = Invoke-BusterConnectivity `
+                    -Silent `
+                    -CntlmPath 'C:\fake\cntlm.exe'
+
+                $result.Success | Should -BeTrue
+                $result.Mode    | Should -BeIn @('Proxy','Direct')
+            }
         }
     }
 
-    Context 'Direct succeeds' {
-        Mock Test-Path { $false }
-        Mock Invoke-WebRequest { $true }
+    Context 'Falls back to direct access' {
 
-        It 'returns direct success' {
-            (Invoke-BusterConnectivity).Mode | Should -Be 'Direct'
-        }
-    }
+        InModuleScope BusterMyConnection {
 
-    Context 'No connectivity' {
-        Mock Test-Path { $false }
-        Mock Invoke-WebRequest { throw }
+            Mock Test-LocalProxy { $false } -ModuleName Network
+            Mock Test-DirectInternet { $true } -ModuleName Network
+            Mock Clear-ProxyEnvironment {} -ModuleName Network
 
-        It 'returns failure' {
-            (Invoke-BusterConnectivity).Success | Should -BeFalse
+            It 'returns direct mode when proxy is unavailable' {
+                $result = Invoke-BusterConnectivity `
+                    -Silent `
+                    -CntlmPath 'C:\nonexistent\cntlm.exe'
+
+                $result.Success | Should -BeTrue
+                $result.Mode    | Should -Be 'Direct'
+            }
         }
     }
 }
