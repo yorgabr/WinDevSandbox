@@ -16,22 +16,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up PowerShell
-        uses: PowerShell/PowerShell@v1
-        with:
-          version: '5.1'
-
       - name: Install Invoke-Build
-        shell: pwsh
+        shell: powershell
         run: |
           Install-Module InvokeBuild -Force -Scope CurrentUser -Repository PSGallery
 
       - name: Install Pester
-        shell: pwsh
+        shell: powershell
         run: |
           Install-Module Pester -Force -Scope CurrentUser -Repository PSGallery
 
       - name: Run build
-        shell: pwsh
+        shell: powershell
         run: |
           Invoke-Build
