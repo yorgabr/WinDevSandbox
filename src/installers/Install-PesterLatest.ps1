@@ -20,6 +20,8 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$SCRIPT_VERSION = "1.12.0"
+
 #--------------------------------------------------
 # Logging helpers
 #--------------------------------------------------
