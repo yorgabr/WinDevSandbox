@@ -28,23 +28,25 @@ function Warn    { param($m) Write-Warning $m }
 Info "Bootstrapping WinDevSandbox environment"
 Info "Sandbox root: $SandboxRoot"
 
-# --------------------------------------------------
+#--------------------------------------------------
 # Network bootstrap (authoritative)
-# --------------------------------------------------
-$BusterPath = Join-Path $SandboxRoot 'network\Buster-MyConnection.ps1'
+#--------------------------------------------------
+$BusterModule = Join-Path $SandboxRoot 'network\BusterMyConnection\BusterMyConnection.psd1'
 
-if (-not (Test-Path -LiteralPath $BusterPath)) {
-    throw "Network bootstrap not found: $BusterPath"
+if (-not (Test-Path -LiteralPath $BusterModule)) {
+    throw "Buster module not found: $BusterModule"
 }
 
-Info "Establishing network connectivity..."
-& $BusterPath
+Info "Bootstrapping network connectivity..."
+Import-Module $BusterModule -Force
 
-if ($LASTEXITCODE -ne 0) {
+$result = Invoke-BusterConnectivity -Silent
+
+if (-not $result.Success) {
     throw "Network bootstrap failed. Aborting WinDevSandbox bootstrap."
 }
 
-Success "Network connectivity established."
+Success "Network connectivity established via $($result.Mode)."
 
 # --------------------------------------------------
 # Installers
