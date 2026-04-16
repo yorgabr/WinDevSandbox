@@ -4,8 +4,8 @@ WinDevSandbox is a reproducible PowerShell toolchain for Windows development in
 corporate environments. It provides a structured and self-healing setup for
 network connectivity, testing, and build orchestration.
 
-![CI](https://github.com/yorgabr/WinDevSandbox)
-https://img.shields.io/github/v/tag/yorgabr/WinDevSandbox
+[![CI](https://github.com/yorgabr/WinDevSandbox/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yorgabr/WinDevSandbox/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/tag/yorgabr/WinDevSandbox)](https://github.com/yorgabr/WinDevSandbox/tags)
 
 ---
 
