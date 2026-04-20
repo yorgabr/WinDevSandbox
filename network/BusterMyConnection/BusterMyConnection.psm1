@@ -33,12 +33,15 @@ function Invoke-BusterConnectivity {
     # --- Direct access fallback
     Clear-ProxyEnvironment
 
-    if (Test-DirectInternet -TimeoutSeconds $TimeoutSeconds) {
-        return @{
-            Mode    = 'Direct'
-            Success = $true
-        }
+    function Test-DirectConnectivity {
+        [CmdletBinding()]
+        param(
+            [int]$TimeoutSeconds
+        )
+
+        Test-DirectInternet -TimeoutSeconds $TimeoutSeconds
     }
+
 
     return @{
         Mode    = 'None'
@@ -46,4 +49,4 @@ function Invoke-BusterConnectivity {
     }
 }
 
-Export-ModuleMember -Function Invoke-BusterConnectivity
+Export-ModuleMember -Function Invoke-BusterConnectivity, Test-DirectConnectivity
