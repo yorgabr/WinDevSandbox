@@ -9,16 +9,19 @@ task Test {
 
     $pesterConfig = New-PesterConfiguration
 
-    $pesterConfig.Run.Path = 'tests'
+    $pesterConfig.Run.Path    = 'tests'
     $pesterConfig.Run.PassThru = $true
 
     # CI mode
     $pesterConfig.Output.CIFormat = 'AzureDevOps'
-    $pesterConfig.Run.Exit = $true
+    $pesterConfig.Run.Exit        = $true
 
-    # Code coverage
+    # Code coverage — all production modules measured together
     $pesterConfig.CodeCoverage.Enabled = $true
-    $pesterConfig.CodeCoverage.Path = 'network/BusterMyConnection/BusterMyConnection.psm1'
+    $pesterConfig.CodeCoverage.Path    = @(
+        'network/BusterMyConnection/BusterMyConnection.psm1',
+        'network/lib/Network.psm1'
+    )
 
     Invoke-Pester -Configuration $pesterConfig
 }

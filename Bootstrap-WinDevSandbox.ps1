@@ -29,6 +29,22 @@ Info "Bootstrapping WinDevSandbox environment"
 Info "Sandbox root: $SandboxRoot"
 
 #--------------------------------------------------
+# Unblock all repository scripts
+#   Files downloaded from the internet (browser, GitHub ZIP) carry a
+#   Zone.Identifier alternate data stream that triggers the PowerShell
+#   execution-policy security prompt. Unblocking them here, before any
+#   Import-Module call, silences that warning for the entire toolchain.
+#--------------------------------------------------
+Info "Unblocking repository scripts..."
+
+Get-ChildItem -Path $SandboxRoot -Recurse -Include '*.ps1', '*.psm1', '*.psd1' -File |
+    ForEach-Object {
+        Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+    }
+
+Success "Scripts unblocked."
+
+#--------------------------------------------------
 # Network bootstrap (authoritative)
 #--------------------------------------------------
 $BusterModule = Join-Path $SandboxRoot 'network\BusterMyConnection\BusterMyConnection.psd1'
