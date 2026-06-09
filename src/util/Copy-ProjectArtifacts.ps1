@@ -53,13 +53,13 @@
 
 .NOTES
     Author  : Yorga Babuscan (yorgabr@gmail.com)
-    Version : 2.2
+    Version : 2.6
     Env     : PowerShell 5.1+
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Position = 0)]
-    [string]$RootPath = (Get-Location).Path,
+    [string]$RootPath = $PWD.Path,
 
     [Parameter()]
     [string[]]$IncludeMask = @(),
@@ -87,24 +87,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Explicit encoding map — avoids dynamic member access ([Type]::$variable)
-# which throws "Cannot evaluate parameter 'Name' ... no input" in PS7
-$EncodingMap = @{
-    UTF8    = [System.Text.Encoding]::UTF8
-    UTF7    = [System.Text.Encoding]::UTF7
-    UTF32   = [System.Text.Encoding]::UTF32
-    ASCII   = [System.Text.Encoding]::ASCII
-    Unicode = [System.Text.Encoding]::Unicode
-    Default = [System.Text.Encoding]::Default
-}
-
 # ── Private Functions ─────────────────────────────────────────────────────────
 
 function Test-IsTextFile {
+    [CmdletBinding()]
     [OutputType([bool])]
     param(
         [Parameter(Mandatory)]
-        [System.IO.FileInfo]$FileInfo,
+        $FileInfo,
 
         [int]$CheckBytes = 512
     )
@@ -114,7 +104,7 @@ function Test-IsTextFile {
     $stream = $null
     try {
         $stream    = [System.IO.File]::OpenRead($FileInfo.FullName)
-        $toRead    = [Math]::Min($CheckBytes, $FileInfo.Length)
+        $toRead    = [int][Math]::Min([long]$CheckBytes, [long]$FileInfo.Length)
         $buffer    = New-Object byte[] $toRead
         $bytesRead = $stream.Read($buffer, 0, $toRead)
 
@@ -133,13 +123,14 @@ function Test-IsTextFile {
 }
 
 function ConvertTo-RegexFromGlob {
+    [CmdletBinding()]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string]$Pattern
     )
-
-    $p = $Pattern.Trim().Replace('\', '/')
+    $p = $Pattern.Trim().Replace([char]92, [char]47)   # '' -> '/'
 
     if ([string]::IsNullOrWhiteSpace($p) -or $p.StartsWith('#')) { return $null }
 
@@ -149,24 +140,27 @@ function ConvertTo-RegexFromGlob {
     }
 
     $anchored = $p.StartsWith('/')
-    if ($anchored) { $p = $p.TrimStart('/') }
-    if ($p.EndsWith('/')) { $p = $p.TrimEnd('/') }
+    if ($anchored) { $p = $p.TrimStart([char]47) }
+    if ($p.EndsWith('/')) { $p = $p.TrimEnd([char]47) }
+
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
 
     $p = [regex]::Escape($p)
-    $p = $p -replace '\\\*\\\*', '§GLOBSTAR§'
+    $p = $p -replace '\\\*\\\*', 'GLOBSTARTOKEN'
     $p = $p -replace '\\\*',     '[^/]*'
     $p = $p -replace '\\\?',     '[^/]'
-    $p = $p -replace '§GLOBSTAR§', '.*'
+    $p = $p -replace 'GLOBSTARTOKEN', '.*'
 
     if ($anchored) { return "^$p(/.*)?$" }
     else           { return "(^|.+/)$p(/.*)?$" }
 }
 
-function Build-IgnoreRegexList {
+function ConvertTo-IgnoreRegexList {
+    [CmdletBinding()]
     [OutputType([string[]])]
     param(
         [string]  $GitignorePath,
-        [string[]]$ExtraExcludes
+        [string[]]$ExtraExcludes = @()
     )
 
     $hardcodedPatterns = @(
@@ -186,30 +180,35 @@ function Build-IgnoreRegexList {
         '.vscode/**'
     )
 
-    $allPatterns = $hardcodedPatterns + $ExtraExcludes
+    $allPatterns = @($hardcodedPatterns) + @($ExtraExcludes)
 
-    if (Test-Path $GitignorePath) {
-        $gitignoreLines = Get-Content $GitignorePath -Encoding UTF8 |
-            Where-Object {
-                -not [string]::IsNullOrWhiteSpace($_) -and
-                -not $_.TrimStart().StartsWith('#')
-            }
+    if ($GitignorePath -and (Test-Path -LiteralPath $GitignorePath)) {
+        $gitignoreLines = @(
+            Get-Content -LiteralPath $GitignorePath -Encoding UTF8 |
+                Where-Object {
+                    -not [string]::IsNullOrWhiteSpace($_) -and
+                    -not $_.TrimStart().StartsWith('#')
+                }
+        )
         $allPatterns += $gitignoreLines
         Write-Verbose "Read $($gitignoreLines.Count) rule(s) from .gitignore"
     }
 
-    $regexList = $allPatterns |
-        ForEach-Object { ConvertTo-RegexFromGlob $_ } |
-        Where-Object   { $null -ne $_ }
+    $regexList = @(
+        $allPatterns |
+            ForEach-Object { ConvertTo-RegexFromGlob -Pattern $_ } |
+            Where-Object   { $null -ne $_ }
+    )
 
-    return $regexList
+    return ,$regexList
 }
 
 function Test-ShouldIgnore {
+    [CmdletBinding()]
     [OutputType([bool])]
     param(
         [string]  $RelativePath,
-        [string[]]$RegexList
+        [string[]]$RegexList = @()
     )
 
     foreach ($rx in $RegexList) {
@@ -219,16 +218,20 @@ function Test-ShouldIgnore {
 }
 
 function Test-MatchesMask {
+    [CmdletBinding()]
     [OutputType([bool])]
     param(
-        [System.IO.FileInfo]$FileInfo,
-        [string]            $RelativePath,
-        [string[]]          $IncludeMask,
-        [string[]]          $ExcludeMask
+        $FileInfo,
+
+        [string]  $RelativePath,
+
+        [string[]]$IncludeMask = @(),
+
+        [string[]]$ExcludeMask = @()
     )
 
     foreach ($mask in $ExcludeMask) {
-        $normalizedMask = $mask.Replace('\', '/')
+        $normalizedMask = $mask.Replace([char]92, [char]47)
         if ($RelativePath  -like $normalizedMask) { return $false }
         if ($FileInfo.Name -like $normalizedMask) { return $false }
     }
@@ -243,20 +246,49 @@ function Test-MatchesMask {
     return $true
 }
 
-# ── Main Process ──────────────────────────────────────────────────────────────
+function Resolve-EncodingObject {
+    [CmdletBinding()]
+    [OutputType([System.Text.Encoding])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Encoding
+    )
 
-process {
-    # Validate RootPath explicitly — ValidateScript was removed because it
-    # throws when the default value is used and $_ is null in PS7
+    # Resolved via switch — avoids dynamic member access
+    # ([System.Text.Encoding]::$variable) which fails in PS7
+    switch ($Encoding) {
+        'UTF8'    { [System.Text.Encoding]::UTF8    }
+        'UTF7'    { [System.Text.Encoding]::UTF7    }
+        'UTF32'   { [System.Text.Encoding]::UTF32   }
+        'ASCII'   { [System.Text.Encoding]::ASCII   }
+        'Unicode' { [System.Text.Encoding]::Unicode }
+        default   { [System.Text.Encoding]::Default }
+    }
+}
+
+# ── Core Orchestrator ─────────────────────────────────────────────────────────
+
+function Invoke-ProjectArtifactCopy {
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([PSCustomObject])]
+    param(
+        [string]  $RootPath,
+        [string[]]$IncludeMask        = @(),
+        [string[]]$ExcludeMask        = @(),
+        [int]     $MaxFileSizeKB      = 512,
+        [int]     $MaxTotalSizeKB     = 3072,
+        [int]     $NullByteCheckBytes = 512,
+        [string]  $Encoding           = 'UTF8'
+    )
+
     if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
-        Write-Error "RootPath does not exist or is not a directory: '$RootPath'"
-        exit 1
+        throw "RootPath does not exist or is not a directory: '$RootPath'"
     }
 
-    $RootPath      = $RootPath.TrimEnd('\', '/')
+    $RootPath = $RootPath.TrimEnd([char]92, [char]47)   # remove trailing \ or /
     $maxFileBytes  = $MaxFileSizeKB  * 1KB
     $maxTotalBytes = $MaxTotalSizeKB * 1KB
-    $encodingObj   = $EncodingMap[$Encoding]
+    $encodingObj   = Resolve-EncodingObject -Encoding $Encoding
 
     Write-Verbose "RootPath       : $RootPath"
     Write-Verbose "IncludeMask    : $($IncludeMask -join ', ')"
@@ -266,31 +298,34 @@ process {
     Write-Verbose "Encoding       : $Encoding"
 
     $gitignorePath = Join-Path $RootPath '.gitignore'
-    $ignoreRegexes = Build-IgnoreRegexList `
+    $ignoreRegexes = ConvertTo-IgnoreRegexList `
                         -GitignorePath $gitignorePath `
                         -ExtraExcludes $ExcludeMask
 
     Write-Verbose "Compiled ignore rules: $($ignoreRegexes.Count)"
 
     $stats = [PSCustomObject]@{
-        Processed  = 0
-        Skipped    = 0
-        TooLarge   = 0
-        Binary     = 0
-        Ignored    = 0
-        TotalBytes = 0
+        Processed    = 0
+        Skipped      = 0
+        TooLarge     = 0
+        Binary       = 0
+        Ignored      = 0
+        TotalBytes   = 0
+        LimitReached = $false
+        Output       = ''
     }
 
-    $outputParts  = [System.Collections.Generic.List[string]]::new()
-    $totalChars   = 0
-    $limitReached = $false
+    $outputParts = [System.Collections.Generic.List[string]]::new()
+    $totalChars  = 0
 
-    $allFiles = Get-ChildItem -LiteralPath $RootPath -Recurse -File |
-                    Sort-Object FullName
+    $allFiles = @(
+        Get-ChildItem -LiteralPath $RootPath -Recurse -File |
+            Sort-Object FullName
+    )
 
     foreach ($file in $allFiles) {
 
-        $relativePath = $file.FullName.Substring($RootPath.Length + 1).Replace('\', '/')
+        $relativePath = $file.FullName.Substring($RootPath.Length + 1).Replace([char]92, [char]47)
 
         # Filter 1: ignore rules
         if (Test-ShouldIgnore -RelativePath $relativePath -RegexList $ignoreRegexes) {
@@ -326,7 +361,7 @@ process {
             continue
         }
 
-        # Read content — uses pre-resolved encoding object, not dynamic member access
+        # Read content
         try {
             $content = [System.IO.File]::ReadAllText($file.FullName, $encodingObj)
         }
@@ -340,7 +375,7 @@ process {
         $entryLength = $relativePath.Length + $content.Length + 20
         if (($totalChars + $entryLength) -gt $maxTotalBytes) {
             Write-Warning "Total limit of $MaxTotalSizeKB KB reached. Processing stopped."
-            $limitReached = $true
+            $stats.LimitReached = $true
             break
         }
 
@@ -354,14 +389,40 @@ process {
         Write-Verbose "INCLUDED  : $relativePath ($([Math]::Round($file.Length / 1KB, 1)) KB)"
     }
 
-    # Write to clipboard
     if ($outputParts.Count -gt 0) {
-        $finalOutput = [System.String]::Join([System.Environment]::NewLine, $outputParts)
+        $finalOutput  = [System.String]::Join([System.Environment]::NewLine, $outputParts)
+        $stats.Output = $finalOutput
 
         if ($PSCmdlet.ShouldProcess('Clipboard', 'Write aggregated content')) {
             Set-Clipboard -Value $finalOutput
         }
+    }
 
+    return $stats
+}
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
+# Guard: only auto-run when the script is invoked directly, NOT when it is
+# dot-sourced (e.g. by Pester) for unit testing of individual functions.
+
+if ($MyInvocation.InvocationName -ne '.') {
+
+    $invokeParams = @{
+        RootPath           = $RootPath
+        IncludeMask        = $IncludeMask
+        ExcludeMask        = $ExcludeMask
+        MaxFileSizeKB      = $MaxFileSizeKB
+        MaxTotalSizeKB     = $MaxTotalSizeKB
+        NullByteCheckBytes = $NullByteCheckBytes
+        Encoding           = $Encoding
+    }
+    # Forward common parameters (WhatIf/Confirm/Verbose) to the orchestrator.
+    if ($PSBoundParameters.ContainsKey('WhatIf'))  { $invokeParams['WhatIf']  = $PSBoundParameters['WhatIf'] }
+    if ($PSBoundParameters.ContainsKey('Confirm')) { $invokeParams['Confirm'] = $PSBoundParameters['Confirm'] }
+
+    $stats = Invoke-ProjectArtifactCopy @invokeParams
+
+    if ($stats.Processed -gt 0 -or $stats.Skipped -gt 0) {
         Write-Host "`n  Done!" -ForegroundColor Green
         Write-Host ("  Files included     : {0}"    -f $stats.Processed)  -ForegroundColor Cyan
         Write-Host ("  Files skipped      : {0}"    -f $stats.Skipped)    -ForegroundColor Yellow
@@ -370,7 +431,7 @@ process {
         Write-Host ("    Exceeds size     : {0}"    -f $stats.TooLarge)   -ForegroundColor DarkYellow
         Write-Host ("  Total size         : {0} KB" -f [Math]::Round($stats.TotalBytes / 1KB, 1)) -ForegroundColor Cyan
 
-        if ($limitReached) {
+        if ($stats.LimitReached) {
             Write-Host "`n  Output truncated — increase -MaxTotalSizeKB if needed." -ForegroundColor Red
         }
     }
