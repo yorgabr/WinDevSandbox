@@ -53,13 +53,12 @@
 
 .NOTES
     Author  : Yorga Babuscan (yorgabr@gmail.com)
-    Version : 2.0
+    Version : 2.1
     Env     : PowerShell 5.1+
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Position = 0)]
-    [ValidateScript({ Test-Path $_ -PathType Container })]
     [string]$RootPath = (Get-Location).Path,
 
     [Parameter()]
@@ -88,7 +87,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-#region ── Private Functions ──────────────────────────────────────────────────
+# ── Private Functions ─────────────────────────────────────────────────────────
 
 <#
 .SYNOPSIS
@@ -179,11 +178,9 @@ function ConvertTo-RegexFromGlob {
     $p = $p -replace '§GLOBSTAR§', '.*'
 
     if ($anchored) {
-        # Anchored pattern: must match from the project root
         return "^$p(/.*)?$"
     }
     else {
-        # Unanchored: may appear at any directory level
         return "(^|.+/)$p(/.*)?$"
     }
 }
@@ -285,17 +282,22 @@ function Test-MatchesMask {
         foreach ($mask in $IncludeMask) {
             if ($FileInfo.Name -like $mask) { return $true }
         }
-        return $false   # Did not match any include pattern → reject
+        return $false
     }
 
     return $true
 }
 
-#endregion ── Private Functions ───────────────────────────────────────────────
-
-#region ── Main Process ───────────────────────────────────────────────────────
+# ── Main Process ──────────────────────────────────────────────────────────────
 
 process {
+    # Validate RootPath explicitly instead of using ValidateScript in param(),
+    # which fails when no argument is supplied because $_ is null at that point
+    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+        Write-Error "RootPath does not exist or is not a directory: '$RootPath'"
+        exit 1
+    }
+
     # Normalize RootPath — remove any trailing slash
     $RootPath      = $RootPath.TrimEnd('\', '/')
     $maxFileBytes  = $MaxFileSizeKB  * 1KB
@@ -310,8 +312,8 @@ process {
     # Build the ignore regex list
     $gitignorePath = Join-Path $RootPath '.gitignore'
     $ignoreRegexes = Build-IgnoreRegexList `
-                        -GitignorePath  $gitignorePath `
-                        -ExtraExcludes  $ExcludeMask
+                        -GitignorePath $gitignorePath `
+                        -ExtraExcludes $ExcludeMask
 
     Write-Verbose "Compiled ignore rules: $($ignoreRegexes.Count)"
 
@@ -339,7 +341,7 @@ process {
         # Relative path with forward slashes for cross-platform consistency
         $relativePath = $file.FullName.Substring($RootPath.Length + 1).Replace('\', '/')
 
-        # ── Filter 1: ignore rules (hardcoded + .gitignore + ExcludeMask) ──
+        # Filter 1: ignore rules (hardcoded + .gitignore + ExcludeMask)
         if (Test-ShouldIgnore -RelativePath $relativePath -RegexList $ignoreRegexes) {
             Write-Verbose "IGNORED   : $relativePath"
             $stats.Ignored++
@@ -347,7 +349,7 @@ process {
             continue
         }
 
-        # ── Filter 2: IncludeMask / ExcludeMask (simple -like wildcards) ──
+        # Filter 2: IncludeMask / ExcludeMask (simple -like wildcards)
         if (-not (Test-MatchesMask -FileInfo      $file `
                                    -RelativePath  $relativePath `
                                    -IncludeMask   $IncludeMask `
@@ -357,7 +359,7 @@ process {
             continue
         }
 
-        # ── Filter 3: individual file size ──
+        # Filter 3: individual file size
         if ($file.Length -gt $maxFileBytes) {
             Write-Warning "File too large ($([Math]::Round($file.Length / 1KB, 1)) KB), skipped: $relativePath"
             $stats.TooLarge++
@@ -365,7 +367,7 @@ process {
             continue
         }
 
-        # ── Filter 4: binary detection via null-byte inspection ──
+        # Filter 4: binary detection via null-byte inspection
         if (-not (Test-IsTextFile -FileInfo $file -CheckBytes $NullByteCheckBytes)) {
             Write-Verbose "BINARY    : $relativePath"
             $stats.Binary++
@@ -373,7 +375,7 @@ process {
             continue
         }
 
-        # ── Read file content ──
+        # Read file content
         try {
             $content = [System.IO.File]::ReadAllText(
                 $file.FullName,
@@ -386,8 +388,8 @@ process {
             continue
         }
 
-        # ── Filter 5: cumulative output size limit ──
-        $entryLength = $relativePath.Length + $content.Length + 20  # header overhead
+        # Filter 5: cumulative output size limit
+        $entryLength = $relativePath.Length + $content.Length + 20
         if (($totalChars + $entryLength) -gt $maxTotalBytes) {
             Write-Warning "Total limit of $MaxTotalSizeKB KB reached. Processing stopped."
             $limitReached = $true
@@ -395,8 +397,8 @@ process {
         }
 
         $outputParts.Add("=== $relativePath ===")
-        $outputParts.Add($content.TrimEnd())    # Strip trailing whitespace
-        $outputParts.Add('')                     # Blank line between files
+        $outputParts.Add($content.TrimEnd())
+        $outputParts.Add('')
 
         $totalChars       += $entryLength
         $stats.Processed++
@@ -404,7 +406,7 @@ process {
         Write-Verbose "INCLUDED  : $relativePath ($([Math]::Round($file.Length / 1KB, 1)) KB)"
     }
 
-    # ── Write to clipboard ──
+    # Write to clipboard
     if ($outputParts.Count -gt 0) {
         $finalOutput = [System.String]::Join([System.Environment]::NewLine, $outputParts)
 
@@ -413,11 +415,11 @@ process {
         }
 
         Write-Host "`n  Done!" -ForegroundColor Green
-        Write-Host ("  Files included     : {0}"   -f $stats.Processed)  -ForegroundColor Cyan
-        Write-Host ("  Files skipped      : {0}"   -f $stats.Skipped)    -ForegroundColor Yellow
-        Write-Host ("    Ignored by rule  : {0}"   -f $stats.Ignored)    -ForegroundColor DarkYellow
-        Write-Host ("    Binary files     : {0}"   -f $stats.Binary)     -ForegroundColor DarkYellow
-        Write-Host ("    Exceeds size     : {0}"   -f $stats.TooLarge)   -ForegroundColor DarkYellow
+        Write-Host ("  Files included     : {0}"    -f $stats.Processed)  -ForegroundColor Cyan
+        Write-Host ("  Files skipped      : {0}"    -f $stats.Skipped)    -ForegroundColor Yellow
+        Write-Host ("    Ignored by rule  : {0}"    -f $stats.Ignored)    -ForegroundColor DarkYellow
+        Write-Host ("    Binary files     : {0}"    -f $stats.Binary)     -ForegroundColor DarkYellow
+        Write-Host ("    Exceeds size     : {0}"    -f $stats.TooLarge)   -ForegroundColor DarkYellow
         Write-Host ("  Total size         : {0} KB" -f [Math]::Round($stats.TotalBytes / 1KB, 1)) -ForegroundColor Cyan
 
         if ($limitReached) {
@@ -428,5 +430,3 @@ process {
         Write-Host 'No text files found matching the given criteria.' -ForegroundColor Yellow
     }
 }
-
-#endregion ── Main Process ────────────────────────────────────────────────────
