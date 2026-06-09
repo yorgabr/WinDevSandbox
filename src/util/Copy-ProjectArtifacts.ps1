@@ -53,7 +53,7 @@
 
 .NOTES
     Author  : Yorga Babuscan (yorgabr@gmail.com)
-    Version : 2.1
+    Version : 2.2
     Env     : PowerShell 5.1+
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -87,13 +87,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Explicit encoding map — avoids dynamic member access ([Type]::$variable)
+# which throws "Cannot evaluate parameter 'Name' ... no input" in PS7
+$EncodingMap = @{
+    UTF8    = [System.Text.Encoding]::UTF8
+    UTF7    = [System.Text.Encoding]::UTF7
+    UTF32   = [System.Text.Encoding]::UTF32
+    ASCII   = [System.Text.Encoding]::ASCII
+    Unicode = [System.Text.Encoding]::Unicode
+    Default = [System.Text.Encoding]::Default
+}
+
 # ── Private Functions ─────────────────────────────────────────────────────────
 
-<#
-.SYNOPSIS
-    Returns $true if the file contains no null bytes within the first
-    N bytes, indicating it is likely a text file.
-#>
 function Test-IsTextFile {
     [OutputType([bool])]
     param(
@@ -103,7 +109,6 @@ function Test-IsTextFile {
         [int]$CheckBytes = 512
     )
 
-    # Empty files are treated as text by convention
     if ($FileInfo.Length -eq 0) { return $true }
 
     $stream = $null
@@ -123,23 +128,10 @@ function Test-IsTextFile {
         return $false
     }
     finally {
-        # Guarantees the stream is closed even when an exception is thrown
         if ($null -ne $stream) { $stream.Dispose() }
     }
 }
 
-<#
-.SYNOPSIS
-    Converts a simple glob pattern into a regular expression string.
-
-.NOTES
-    Supported tokens:
-        *   — any character except forward slash
-        **  — any character including forward slash
-        ?   — exactly one character (not a slash)
-        /   at the start  → pattern is anchored to the project root
-        /   at the end    → directory-only marker (treated as prefix match)
-#>
 function ConvertTo-RegexFromGlob {
     [OutputType([string])]
     param(
@@ -147,13 +139,10 @@ function ConvertTo-RegexFromGlob {
         [string]$Pattern
     )
 
-    # Normalize path separators
     $p = $Pattern.Trim().Replace('\', '/')
 
-    # Skip blank lines and comments (extra safety when parsing .gitignore)
     if ([string]::IsNullOrWhiteSpace($p) -or $p.StartsWith('#')) { return $null }
 
-    # Negation patterns (!) are not supported in this version
     if ($p.StartsWith('!')) {
         Write-Verbose "Negation pattern not supported, skipped: $Pattern"
         return $null
@@ -161,35 +150,18 @@ function ConvertTo-RegexFromGlob {
 
     $anchored = $p.StartsWith('/')
     if ($anchored) { $p = $p.TrimStart('/') }
-
-    # Trailing slash signals directory-only; treat as prefix match
     if ($p.EndsWith('/')) { $p = $p.TrimEnd('/') }
 
-    # Escape all regex special characters before restoring glob tokens
     $p = [regex]::Escape($p)
-
-    # Restore glob semantics:
-    #   \*\* → .*       (globstar — any path segment)
-    #   \*   → [^/]*    (single-level wildcard)
-    #   \?   → [^/]     (single character)
     $p = $p -replace '\\\*\\\*', '§GLOBSTAR§'
     $p = $p -replace '\\\*',     '[^/]*'
     $p = $p -replace '\\\?',     '[^/]'
     $p = $p -replace '§GLOBSTAR§', '.*'
 
-    if ($anchored) {
-        return "^$p(/.*)?$"
-    }
-    else {
-        return "(^|.+/)$p(/.*)?$"
-    }
+    if ($anchored) { return "^$p(/.*)?$" }
+    else           { return "(^|.+/)$p(/.*)?$" }
 }
 
-<#
-.SYNOPSIS
-    Builds the consolidated list of ignore regular expressions from
-    hardcoded rules, .gitignore, and any extra exclude patterns.
-#>
 function Build-IgnoreRegexList {
     [OutputType([string[]])]
     param(
@@ -197,7 +169,6 @@ function Build-IgnoreRegexList {
         [string[]]$ExtraExcludes
     )
 
-    # Rules that are always ignored, regardless of .gitignore
     $hardcodedPatterns = @(
         '.git/**',
         '.gitignore',
@@ -234,10 +205,6 @@ function Build-IgnoreRegexList {
     return $regexList
 }
 
-<#
-.SYNOPSIS
-    Returns $true if the relative path matches any ignore regular expression.
-#>
 function Test-ShouldIgnore {
     [OutputType([bool])]
     param(
@@ -251,16 +218,6 @@ function Test-ShouldIgnore {
     return $false
 }
 
-<#
-.SYNOPSIS
-    Returns $true if the file passes the IncludeMask and ExcludeMask filters.
-
-.NOTES
-    Evaluation order:
-        1. ExcludeMask  — if matched, the file is rejected immediately.
-        2. IncludeMask  — if provided and not matched, the file is rejected.
-        3. Otherwise    — the file is accepted.
-#>
 function Test-MatchesMask {
     [OutputType([bool])]
     param(
@@ -270,14 +227,12 @@ function Test-MatchesMask {
         [string[]]          $ExcludeMask
     )
 
-    # Step 1 — Explicit exclusion by wildcard mask
     foreach ($mask in $ExcludeMask) {
         $normalizedMask = $mask.Replace('\', '/')
         if ($RelativePath  -like $normalizedMask) { return $false }
         if ($FileInfo.Name -like $normalizedMask) { return $false }
     }
 
-    # Step 2 — Explicit inclusion by wildcard mask
     if ($IncludeMask.Count -gt 0) {
         foreach ($mask in $IncludeMask) {
             if ($FileInfo.Name -like $mask) { return $true }
@@ -291,25 +246,25 @@ function Test-MatchesMask {
 # ── Main Process ──────────────────────────────────────────────────────────────
 
 process {
-    # Validate RootPath explicitly instead of using ValidateScript in param(),
-    # which fails when no argument is supplied because $_ is null at that point
+    # Validate RootPath explicitly — ValidateScript was removed because it
+    # throws when the default value is used and $_ is null in PS7
     if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
         Write-Error "RootPath does not exist or is not a directory: '$RootPath'"
         exit 1
     }
 
-    # Normalize RootPath — remove any trailing slash
     $RootPath      = $RootPath.TrimEnd('\', '/')
     $maxFileBytes  = $MaxFileSizeKB  * 1KB
     $maxTotalBytes = $MaxTotalSizeKB * 1KB
+    $encodingObj   = $EncodingMap[$Encoding]
 
     Write-Verbose "RootPath       : $RootPath"
-    Write-Verbose "IncludeMask    : $($IncludeMask    -join ', ')"
-    Write-Verbose "ExcludeMask    : $($ExcludeMask    -join ', ')"
+    Write-Verbose "IncludeMask    : $($IncludeMask -join ', ')"
+    Write-Verbose "ExcludeMask    : $($ExcludeMask -join ', ')"
     Write-Verbose "MaxFileSizeKB  : $MaxFileSizeKB KB"
     Write-Verbose "MaxTotalSizeKB : $MaxTotalSizeKB KB"
+    Write-Verbose "Encoding       : $Encoding"
 
-    # Build the ignore regex list
     $gitignorePath = Join-Path $RootPath '.gitignore'
     $ignoreRegexes = Build-IgnoreRegexList `
                         -GitignorePath $gitignorePath `
@@ -317,7 +272,6 @@ process {
 
     Write-Verbose "Compiled ignore rules: $($ignoreRegexes.Count)"
 
-    # Runtime statistics
     $stats = [PSCustomObject]@{
         Processed  = 0
         Skipped    = 0
@@ -331,17 +285,14 @@ process {
     $totalChars   = 0
     $limitReached = $false
 
-    # Enumerate files — -LiteralPath avoids issues with brackets in names
-    # Sort-Object ensures a deterministic output order across runs
     $allFiles = Get-ChildItem -LiteralPath $RootPath -Recurse -File |
                     Sort-Object FullName
 
     foreach ($file in $allFiles) {
 
-        # Relative path with forward slashes for cross-platform consistency
         $relativePath = $file.FullName.Substring($RootPath.Length + 1).Replace('\', '/')
 
-        # Filter 1: ignore rules (hardcoded + .gitignore + ExcludeMask)
+        # Filter 1: ignore rules
         if (Test-ShouldIgnore -RelativePath $relativePath -RegexList $ignoreRegexes) {
             Write-Verbose "IGNORED   : $relativePath"
             $stats.Ignored++
@@ -349,11 +300,11 @@ process {
             continue
         }
 
-        # Filter 2: IncludeMask / ExcludeMask (simple -like wildcards)
-        if (-not (Test-MatchesMask -FileInfo      $file `
-                                   -RelativePath  $relativePath `
-                                   -IncludeMask   $IncludeMask `
-                                   -ExcludeMask   $ExcludeMask)) {
+        # Filter 2: include/exclude masks
+        if (-not (Test-MatchesMask -FileInfo     $file `
+                                   -RelativePath $relativePath `
+                                   -IncludeMask  $IncludeMask `
+                                   -ExcludeMask  $ExcludeMask)) {
             Write-Verbose "MASK      : $relativePath"
             $stats.Skipped++
             continue
@@ -367,7 +318,7 @@ process {
             continue
         }
 
-        # Filter 4: binary detection via null-byte inspection
+        # Filter 4: binary detection
         if (-not (Test-IsTextFile -FileInfo $file -CheckBytes $NullByteCheckBytes)) {
             Write-Verbose "BINARY    : $relativePath"
             $stats.Binary++
@@ -375,12 +326,9 @@ process {
             continue
         }
 
-        # Read file content
+        # Read content — uses pre-resolved encoding object, not dynamic member access
         try {
-            $content = [System.IO.File]::ReadAllText(
-                $file.FullName,
-                [System.Text.Encoding]::$Encoding
-            )
+            $content = [System.IO.File]::ReadAllText($file.FullName, $encodingObj)
         }
         catch {
             Write-Warning "Failed to read '$relativePath': $_"
@@ -388,7 +336,7 @@ process {
             continue
         }
 
-        # Filter 5: cumulative output size limit
+        # Filter 5: cumulative size limit
         $entryLength = $relativePath.Length + $content.Length + 20
         if (($totalChars + $entryLength) -gt $maxTotalBytes) {
             Write-Warning "Total limit of $MaxTotalSizeKB KB reached. Processing stopped."
