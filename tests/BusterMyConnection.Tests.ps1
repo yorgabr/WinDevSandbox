@@ -2,39 +2,28 @@
 <#
 .SYNOPSIS
     Pester 5 test suite for BusterMyConnection.psm1.
-
-.DESCRIPTION
-    Covers every branch of Invoke-BusterConnectivity and Test-DirectConnectivity
-    using module-scoped mocks (-ModuleName BusterMyConnection) so that no real
-    network, filesystem or process calls are ever made.
-
-    Mock placement rule (Pester 5):
-      Mock -ModuleName <M> <Cmd> — intercepts <Cmd> when called from within module <M>.
-      Because BusterMyConnection imports Network.psm1 at load time, all Network
-      functions (Test-LocalProxy, Set-ProxyEnvironment, etc.) are looked up via
-      BusterMyConnection's session state; they must therefore be mocked with
-      -ModuleName BusterMyConnection, not -ModuleName Network.
 #>
 Set-StrictMode -Version Latest
 
 BeforeAll {
+    # Remove any stale copies loaded by earlier test files in this session
+    Get-Module BusterMyConnection, Network -All |
+        Remove-Module -Force -ErrorAction SilentlyContinue
+
     $RepoRoot = Resolve-Path "$PSScriptRoot\.."
-    Import-Module "$RepoRoot\network\BusterMyConnection\BusterMyConnection.psd1" -Force
-    Import-Module "$RepoRoot\network\lib\Network.psm1" -Force
+    Import-Module "$RepoRoot\src\network\BusterMyConnection.psd1" -Force
+    Import-Module "$RepoRoot\src\network\lib\Network.psm1"       -Force
 }
 
-# ===========================================================================
 Describe 'Invoke-BusterConnectivity' {
-# ===========================================================================
 
-    # -----------------------------------------------------------------------
     Context 'CNTLM path exists and local proxy is reachable' {
-    # -----------------------------------------------------------------------
+
         BeforeAll {
-            Mock -ModuleName BusterMyConnection Test-Path           { $true }
-            Mock -ModuleName BusterMyConnection Start-Process       {}
-            Mock -ModuleName BusterMyConnection Start-Sleep         {}
-            Mock -ModuleName BusterMyConnection Test-LocalProxy     { $true }
+            Mock -ModuleName BusterMyConnection Test-Path            { $true }
+            Mock -ModuleName BusterMyConnection Start-Process        {}
+            Mock -ModuleName BusterMyConnection Start-Sleep          {}
+            Mock -ModuleName BusterMyConnection Test-LocalProxy      { $true }
             Mock -ModuleName BusterMyConnection Set-ProxyEnvironment {}
         }
 
@@ -59,7 +48,7 @@ Describe 'Invoke-BusterConnectivity' {
             Should -Invoke -ModuleName BusterMyConnection Set-ProxyEnvironment -Exactly 1
         }
 
-        It 'passes the ProxyPort to Test-LocalProxy' {
+        It 'passes ProxyPort to Test-LocalProxy' {
             Invoke-BusterConnectivity -CntlmPath 'C:\fake\cntlm.exe' -ProxyPort 8080 -Silent
             Should -Invoke -ModuleName BusterMyConnection Test-LocalProxy `
                 -ParameterFilter { $Port -eq 8080 } -Exactly 1
@@ -78,16 +67,15 @@ Describe 'Invoke-BusterConnectivity' {
         }
     }
 
-    # -----------------------------------------------------------------------
-    Context 'CNTLM path exists but proxy is unreachable; direct internet succeeds' {
-    # -----------------------------------------------------------------------
+    Context 'CNTLM path exists but proxy unreachable; direct succeeds' {
+
         BeforeAll {
-            Mock -ModuleName BusterMyConnection Test-Path                { $true }
-            Mock -ModuleName BusterMyConnection Start-Process            {}
-            Mock -ModuleName BusterMyConnection Start-Sleep              {}
-            Mock -ModuleName BusterMyConnection Test-LocalProxy          { $false }
-            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment   {}
-            Mock -ModuleName BusterMyConnection Test-DirectConnectivity  { $true }
+            Mock -ModuleName BusterMyConnection Test-Path               { $true }
+            Mock -ModuleName BusterMyConnection Start-Process           {}
+            Mock -ModuleName BusterMyConnection Start-Sleep             {}
+            Mock -ModuleName BusterMyConnection Test-LocalProxy         { $false }
+            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment  {}
+            Mock -ModuleName BusterMyConnection Test-DirectConnectivity { $true }
         }
 
         It 'returns Mode=Direct with Success=$true' {
@@ -96,7 +84,7 @@ Describe 'Invoke-BusterConnectivity' {
             $r.Success | Should -BeTrue
         }
 
-        It 'clears proxy environment before the direct fallback' {
+        It 'clears proxy environment before direct fallback' {
             Invoke-BusterConnectivity -CntlmPath 'C:\fake\cntlm.exe' -Silent
             Should -Invoke -ModuleName BusterMyConnection Clear-ProxyEnvironment -Exactly 1
         }
@@ -114,16 +102,15 @@ Describe 'Invoke-BusterConnectivity' {
         }
     }
 
-    # -----------------------------------------------------------------------
-    Context 'CNTLM path exists, proxy unreachable, direct also fails' {
-    # -----------------------------------------------------------------------
+    Context 'CNTLM path exists, proxy fails, direct also fails' {
+
         BeforeAll {
-            Mock -ModuleName BusterMyConnection Test-Path                { $true }
-            Mock -ModuleName BusterMyConnection Start-Process            {}
-            Mock -ModuleName BusterMyConnection Start-Sleep              {}
-            Mock -ModuleName BusterMyConnection Test-LocalProxy          { $false }
-            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment   {}
-            Mock -ModuleName BusterMyConnection Test-DirectConnectivity  { $false }
+            Mock -ModuleName BusterMyConnection Test-Path               { $true }
+            Mock -ModuleName BusterMyConnection Start-Process           {}
+            Mock -ModuleName BusterMyConnection Start-Sleep             {}
+            Mock -ModuleName BusterMyConnection Test-LocalProxy         { $false }
+            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment  {}
+            Mock -ModuleName BusterMyConnection Test-DirectConnectivity { $false }
         }
 
         It 'returns Mode=None with Success=$false' {
@@ -132,19 +119,18 @@ Describe 'Invoke-BusterConnectivity' {
             $r.Success | Should -BeFalse
         }
 
-        It 'still clears proxy environment' {
+        It 'clears proxy environment' {
             Invoke-BusterConnectivity -CntlmPath 'C:\fake\cntlm.exe' -Silent
             Should -Invoke -ModuleName BusterMyConnection Clear-ProxyEnvironment -Exactly 1
         }
     }
 
-    # -----------------------------------------------------------------------
-    Context 'CNTLM path is absent; direct internet succeeds' {
-    # -----------------------------------------------------------------------
+    Context 'CNTLM path absent; direct succeeds' {
+
         BeforeAll {
-            Mock -ModuleName BusterMyConnection Test-Path                { $false }
-            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment   {}
-            Mock -ModuleName BusterMyConnection Test-DirectConnectivity  { $true }
+            Mock -ModuleName BusterMyConnection Test-Path               { $false }
+            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment  {}
+            Mock -ModuleName BusterMyConnection Test-DirectConnectivity { $true }
         }
 
         It 'returns Mode=Direct with Success=$true' {
@@ -159,7 +145,7 @@ Describe 'Invoke-BusterConnectivity' {
             Should -Invoke -ModuleName BusterMyConnection Start-Process -Exactly 0
         }
 
-        It 'never sleeps (no CNTLM to wait for)' {
+        It 'never sleeps' {
             Mock -ModuleName BusterMyConnection Start-Sleep {}
             Invoke-BusterConnectivity -CntlmPath 'C:\no\cntlm.exe' -Silent
             Should -Invoke -ModuleName BusterMyConnection Start-Sleep -Exactly 0
@@ -171,13 +157,12 @@ Describe 'Invoke-BusterConnectivity' {
         }
     }
 
-    # -----------------------------------------------------------------------
-    Context 'CNTLM path is absent and direct internet also fails' {
-    # -----------------------------------------------------------------------
+    Context 'CNTLM absent and direct fails' {
+
         BeforeAll {
-            Mock -ModuleName BusterMyConnection Test-Path                { $false }
-            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment   {}
-            Mock -ModuleName BusterMyConnection Test-DirectConnectivity  { $false }
+            Mock -ModuleName BusterMyConnection Test-Path               { $false }
+            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment  {}
+            Mock -ModuleName BusterMyConnection Test-DirectConnectivity { $false }
         }
 
         It 'returns Mode=None with Success=$false' {
@@ -187,33 +172,24 @@ Describe 'Invoke-BusterConnectivity' {
         }
     }
 
-    # -----------------------------------------------------------------------
     Context 'Verbose output when -Silent is omitted' {
-    # -----------------------------------------------------------------------
+
         BeforeAll {
-            Mock -ModuleName BusterMyConnection Test-Path                { $false }
-            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment   {}
-            Mock -ModuleName BusterMyConnection Test-DirectConnectivity  { $false }
+            Mock -ModuleName BusterMyConnection Test-Path               { $false }
+            Mock -ModuleName BusterMyConnection Clear-ProxyEnvironment  {}
+            Mock -ModuleName BusterMyConnection Test-DirectConnectivity { $false }
         }
 
-        It 'does not throw when called without -Silent' {
+        It 'does not throw' {
             { Invoke-BusterConnectivity -CntlmPath 'C:\no\cntlm.exe' } | Should -Not -Throw
         }
     }
 }
 
-
-# ===========================================================================
 Describe 'Test-DirectConnectivity' {
-# ===========================================================================
-# Test-DirectConnectivity is defined at module scope but not listed in
-# FunctionsToExport in the .psd1 manifest, so we invoke it via InModuleScope.
-# Mocks for Test-DirectInternet use -ModuleName BusterMyConnection because
-# that is the module from which the call originates.
 
-    # -----------------------------------------------------------------------
     Context 'Test-DirectInternet returns $true' {
-    # -----------------------------------------------------------------------
+
         BeforeAll {
             Mock -ModuleName BusterMyConnection Test-DirectInternet { $true }
         }
@@ -228,9 +204,8 @@ Describe 'Test-DirectConnectivity' {
         }
     }
 
-    # -----------------------------------------------------------------------
     Context 'Test-DirectInternet returns $false' {
-    # -----------------------------------------------------------------------
+
         BeforeAll {
             Mock -ModuleName BusterMyConnection Test-DirectInternet { $false }
         }
@@ -240,20 +215,19 @@ Describe 'Test-DirectConnectivity' {
         }
     }
 
-    # -----------------------------------------------------------------------
-    Context 'TimeoutSeconds is forwarded to Test-DirectInternet' {
-    # -----------------------------------------------------------------------
+    Context 'TimeoutSeconds is forwarded' {
+
         BeforeAll {
             Mock -ModuleName BusterMyConnection Test-DirectInternet { $true }
         }
 
-        It 'passes the specified TimeoutSeconds value' {
+        It 'passes the specified value' {
             InModuleScope BusterMyConnection { Test-DirectConnectivity -TimeoutSeconds 12 }
             Should -Invoke -ModuleName BusterMyConnection Test-DirectInternet `
                 -ParameterFilter { $TimeoutSeconds -eq 12 } -Exactly 1
         }
 
-        It 'uses the default TimeoutSeconds of 5 when not specified' {
+        It 'defaults to 5 when not specified' {
             InModuleScope BusterMyConnection { Test-DirectConnectivity }
             Should -Invoke -ModuleName BusterMyConnection Test-DirectInternet `
                 -ParameterFilter { $TimeoutSeconds -eq 5 } -Exactly 1

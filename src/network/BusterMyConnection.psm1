@@ -1,7 +1,9 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-Import-Module (Join-Path $PSScriptRoot '..\lib\Network.psm1') -Force
+# Network.psm1 lives in lib/ directly under the same directory as this module.
+# $PSScriptRoot resolves to src/network/, so 'lib\Network.psm1' is correct.
+Import-Module (Join-Path $PSScriptRoot 'lib\Network.psm1') -Force
 
 # ---------------------------------------------------------------------------
 # Test-DirectConnectivity
@@ -20,13 +22,13 @@ function Test-DirectConnectivity {
 # ---------------------------------------------------------------------------
 # Invoke-BusterConnectivity
 #   Primary entry point for network bootstrap.
-#   Strategy: CNTLM proxy (preferred) → Direct internet → failure.
+#   Strategy: CNTLM proxy (preferred) -> Direct internet -> failure.
 # ---------------------------------------------------------------------------
 function Invoke-BusterConnectivity {
     [CmdletBinding()]
     param(
-        [string]$CntlmPath     = (Join-Path $env:LOCALAPPDATA 'Programs\CNTLM\cntlm.exe'),
-        [int]   $ProxyPort     = 3128,
+        [string]$CntlmPath      = (Join-Path $env:LOCALAPPDATA 'Programs\CNTLM\cntlm.exe'),
+        [int]   $ProxyPort      = 3128,
         [int]   $TimeoutSeconds = 5,
         [switch]$Silent
     )

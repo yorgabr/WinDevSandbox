@@ -77,19 +77,19 @@
     Controls ANSI color usage: Auto (default), On, Off.
 
 .EXAMPLE
-    .\Install-PSScriptAnalyzerManual.ps1
+    .\Install-PSScriptAnalyzer.ps1
     Uses a manually downloaded .nupkg in the current directory and installs the module.
 
 .EXAMPLE
-    .\Install-PSScriptAnalyzerManual.ps1 -DownloadIfMissing -Ansi Auto -LogLevel DEBUG
+    .\Install-PSScriptAnalyzer.ps1 -DownloadIfMissing -Ansi Auto -LogLevel DEBUG
     Attempts WebClient download (honoring proxy), uses ANSI auto-detection, and verbose logs.
 
 .EXAMPLE
-    .\Install-PSScriptAnalyzerManual.ps1 -ExpectedHash 'ABCDEF...' -HashAlgorithm SHA256
+    .\Install-PSScriptAnalyzer.ps1 -ExpectedHash 'ABCDEF...' -HashAlgorithm SHA256
     Verifies integrity before installing.
 
 .EXAMPLE
-    .\Install-PSScriptAnalyzerManual.ps1 -Sign -CreateSelfSignedCert
+    .\Install-PSScriptAnalyzer.ps1 -Sign -CreateSelfSignedCert
     Installs and signs the module using a newly created self-signed certificate.
 
 .NOTES
