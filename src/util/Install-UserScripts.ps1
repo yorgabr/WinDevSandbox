@@ -243,7 +243,7 @@ function Get-ScriptFiles {
                 Source   = $_.FullName
                 Name     = $_.Name
                 Type     = 'Shell'
-                DestName = $_.Name -replace '\.sh$', ''
+                DestName = ($_.Name -replace '\.sh$', '')
             })
         }
 
