@@ -4,30 +4,26 @@
     Aggregates text-based project artifacts into the system clipboard.
 
 .DESCRIPTION
-    Recursively scans a directory, filters binary files by inspecting null
-    bytes, respects .gitignore patterns and hardcoded rules, and copies the
-    content of all detected text files to the clipboard with header markers.
+    Recursively scans a directory using an optimized queue-based traversal, 
+    pruning ignored subdirectories (like .venv or node_modules) before scanning 
+    their contents. Filters binary files by inspecting null bytes, respects 
+    .gitignore patterns, and copies text contents to the clipboard.
 
 .PARAMETER RootPath
     The starting directory for the scan. Defaults to the current location.
 
 .PARAMETER IncludeMask
     Array of glob/wildcard patterns to INCLUDE files or directories.
-    Example: '*.ps1','*.md' — accepts only those types.
-    Features active tab-completion parsing workspace extensions.
+    Features optimized tab-completion with directory pruning safety.
 
 .PARAMETER ExcludeMask
     Array of glob/wildcard patterns to EXCLUDE files or directories.
-    Example: '*.min.js','vendor/*'
-    Applied AFTER IncludeMask and BEFORE .gitignore rules.
 
 .PARAMETER MaxFileSizeKB
     Maximum size in KB per file. Default: 512 KB.
-    Larger files are skipped with a warning.
 
 .PARAMETER MaxTotalSizeKB
     Maximum total output size in KB. Default: 3072 KB (3 MB).
-    Processing stops when the limit is reached.
 
 .PARAMETER NullByteCheckBytes
     Number of bytes read for binary detection. Default: 512.
@@ -37,19 +33,11 @@
 
 .EXAMPLE
     .\Copy-ProjectArtifacts.ps1
-    Copies all text files in the current directory to the clipboard.
-
-.EXAMPLE
-    .\Copy-ProjectArtifacts.ps1 -IncludeMask '*.ps1','*.md'
-    Utilizes dynamic auto-complete for extensions.
-
-.EXAMPLE
-    .\Copy-ProjectArtifacts.ps1 -ExcludeMask 'tests/*','*.spec.js' -MaxFileSizeKB 256
-    Excludes specified directories and decreases size bounds.
+    Runs an ultra-fast optimized scan skipping blacklisted directories entirely.
 
 .NOTES
     Author  : Yorga Babuscan (yorgabr@gmail.com)
-    Version : 2.7.0
+    Version : 2.9.1
     Env     : PowerShell 5.1+ (Windows 11 Optimization)
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -63,9 +51,24 @@ param(
         param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
         $target = if ($fakeBoundParameters.ContainsKey('RootPath')) { $fakeBoundParameters['RootPath'] } else { $PWD.Path }
         if (Test-Path -LiteralPath $target -PathType Container) {
-            Get-ChildItem -LiteralPath $target -Recurse -File -ErrorAction SilentlyContinue |
-                Group-Object Extension | Where-Object Name | ForEach-Object { "*$($_.Name)" } |
-                Where-Object { $_ -like "$wordToComplete*" }
+            $extensions = [System.Collections.Generic.HashSet[string]]::new()
+            $queue = [System.Collections.Generic.Queue[string]]::new()
+            $queue.Enqueue($target)
+            $blacklist = @('.git', '.venv', 'node_modules', 'dist', 'build', '.vscode', '.idea', '__pycache__')
+            
+            while ($queue.Count -gt 0 -and $extensions.Count -lt 40) {
+                $curr = $queue.Dequeue()
+                # FIX: Removed exclusive -File and -Directory constraint switches
+                $items = Get-ChildItem -LiteralPath $curr -ErrorAction SilentlyContinue
+                foreach ($item in $items) {
+                    if ($item.PSIsContainer) {
+                        if ($blacklist -notcontains $item.Name) { $queue.Enqueue($item.FullName) }
+                    } elseif ($item.Extension) {
+                        [void]$extensions.Add("*$($item.Extension)")
+                    }
+                }
+            }
+            $extensions | Where-Object { $_ -like "$wordToComplete*" }
         }
     })]
     [string[]]$IncludeMask = @(),
@@ -75,9 +78,24 @@ param(
         param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
         $target = if ($fakeBoundParameters.ContainsKey('RootPath')) { $fakeBoundParameters['RootPath'] } else { $PWD.Path }
         if (Test-Path -LiteralPath $target -PathType Container) {
-            Get-ChildItem -LiteralPath $target -Recurse -File -ErrorAction SilentlyContinue |
-                Group-Object Extension | Where-Object Name | ForEach-Object { "*$($_.Name)" } |
-                Where-Object { $_ -like "$wordToComplete*" }
+            $extensions = [System.Collections.Generic.HashSet[string]]::new()
+            $queue = [System.Collections.Generic.Queue[string]]::new()
+            $queue.Enqueue($target)
+            $blacklist = @('.git', '.venv', 'node_modules', 'dist', 'build', '.vscode', '.idea', '__pycache__')
+            
+            while ($queue.Count -gt 0 -and $extensions.Count -lt 40) {
+                $curr = $queue.Dequeue()
+                # FIX: Removed exclusive -File and -Directory constraint switches
+                $items = Get-ChildItem -LiteralPath $curr -ErrorAction SilentlyContinue
+                foreach ($item in $items) {
+                    if ($item.PSIsContainer) {
+                        if ($blacklist -notcontains $item.Name) { $queue.Enqueue($item.FullName) }
+                    } elseif ($item.Extension) {
+                        [void]$extensions.Add("*$($item.Extension)")
+                    }
+                }
+            }
+            $extensions | Where-Object { $_ -like "$wordToComplete*" }
         }
     })]
     [string[]]$ExcludeMask = @(),
@@ -108,31 +126,24 @@ function Test-IsTextFile {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
-        [Parameter(Mandatory)]
-        $FileInfo,
-
+        [Parameter(Mandatory)] $FileInfo,
         [int]$CheckBytes = 512
     )
-
     if ($FileInfo.Length -eq 0) { return $true }
-
     $stream = $null
     try {
         $stream    = [System.IO.File]::OpenRead($FileInfo.FullName)
         $toRead    = [int][Math]::Min([long]$CheckBytes, [long]$FileInfo.Length)
         $buffer    = New-Object byte[] $toRead
         $bytesRead = $stream.Read($buffer, 0, $toRead)
-
         for ($i = 0; $i -lt $bytesRead; $i++) {
             if ($buffer[$i] -eq 0) { return $false }
         }
         return $true
-    }
-    catch {
+    } catch {
         [Console]::Error.WriteLine("⚠️ Warning: Could not inspect '$($FileInfo.Name)': $_")
         return $false
-    }
-    finally {
+    } finally {
         if ($null -ne $stream) { $stream.Dispose() }
     }
 }
@@ -141,23 +152,15 @@ function ConvertTo-RegexFromGlob {
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string]$Pattern
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Pattern
     )
     $p = $Pattern.Trim().Replace([char]92, [char]47)
-
     if ([string]::IsNullOrWhiteSpace($p) -or $p.StartsWith('#')) { return $null }
-
-    if ($p.StartsWith('!')) {
-        Write-Verbose "Negation pattern not supported, skipped: $Pattern"
-        return $null
-    }
+    if ($p.StartsWith('!')) { return $null }
 
     $anchored = $p.StartsWith('/')
     if ($anchored) { $p = $p.TrimStart([char]47) }
     if ($p.EndsWith('/')) { $p = $p.TrimEnd([char]47) }
-
     if ([string]::IsNullOrWhiteSpace($p)) { return $null }
 
     $p = [regex]::Escape($p)
@@ -174,47 +177,32 @@ function ConvertTo-IgnoreRegexList {
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
-        [string]  $GitignorePath,
+        [string[]]$GitignorePaths,
         [string[]]$ExtraExcludes = @()
     )
-
     $hardcodedPatterns = @(
         '.git/**', '.gitignore', '.coverage', '**/*.lock', '**/*.pdf',
         '.pytest_cache/**', '.ruff_cache/**', '.venv/**', 'node_modules/**',
         '__pycache__/**', 'dist/**', 'build/**', '.idea/**', '.vscode/**'
     )
-
     $allPatterns = @($hardcodedPatterns) + @($ExtraExcludes)
 
-    if ($GitignorePath -and (Test-Path -LiteralPath $GitignorePath)) {
-        $gitignoreLines = @(
-            Get-Content -LiteralPath $GitignorePath -Encoding UTF8 |
-                Where-Object {
-                    -not [string]::IsNullOrWhiteSpace($_) -and
-                    -not $_.TrimStart().StartsWith('#')
-                }
-        )
-        $allPatterns += $gitignoreLines
-        Write-Verbose "Read $($gitignoreLines.Count) rule(s) from .gitignore"
+    foreach ($path in $GitignorePaths) {
+        if ($path -and (Test-Path -LiteralPath $path)) {
+            $allPatterns += @(Get-Content -LiteralPath $path -Encoding UTF8 | 
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.TrimStart().StartsWith('#') })
+        }
     }
-
-    $regexList = @(
-        $allPatterns |
-            ForEach-Object { ConvertTo-RegexFromGlob -Pattern $_ } |
-            Where-Object   { $null -ne $_ }
-    )
-
-    return ,$regexList
+    return ,@($allPatterns | Select-Object -Unique | ForEach-Object { ConvertTo-RegexFromGlob -Pattern $_ } | Where-Object { $null -ne $_ })
 }
 
 function Test-ShouldIgnore {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
-        [string]  $RelativePath,
+        [string]$RelativePath,
         [string[]]$RegexList = @()
     )
-
     foreach ($rx in $RegexList) {
         if ($RelativePath -match $rx) { return $true }
     }
@@ -226,35 +214,27 @@ function Test-MatchesMask {
     [OutputType([bool])]
     param(
         $FileInfo,
-        [string]  $RelativePath,
+        [string]$RelativePath,
         [string[]]$IncludeMask = @(),
         [string[]]$ExcludeMask = @()
     )
-
     foreach ($mask in $ExcludeMask) {
         $normalizedMask = $mask.Replace([char]92, [char]47)
-        if ($RelativePath  -like $normalizedMask) { return $false }
-        if ($FileInfo.Name -like $normalizedMask) { return $false }
+        if ($RelativePath -like $normalizedMask -or $FileInfo.Name -like $normalizedMask) { return $false }
     }
-
     if ($IncludeMask.Count -gt 0) {
         foreach ($mask in $IncludeMask) {
             if ($FileInfo.Name -like $mask) { return $true }
         }
         return $false
     }
-
     return $true
 }
 
 function Resolve-EncodingObject {
     [CmdletBinding()]
     [OutputType([System.Text.Encoding])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Encoding
-    )
-
+    param([Parameter(Mandatory)] [string]$Encoding)
     switch ($Encoding) {
         'UTF8'    { [System.Text.Encoding]::UTF8    }
         'UTF7'    { [System.Text.Encoding]::UTF7    }
@@ -285,39 +265,60 @@ function Invoke-ProjectArtifactCopy {
     $maxTotalBytes = $MaxTotalSizeKB * 1KB
     $encodingObj   = Resolve-EncodingObject -Encoding $Encoding
 
-    $gitignorePath = Join-Path $RootPath '.gitignore'
-    $ignoreRegexes = ConvertTo-IgnoreRegexList `
-                        -GitignorePath $gitignorePath `
-                        -ExtraExcludes $ExcludeMask
+    $discoveredGitignores = @()
+    $callerGitignore = Join-Path $PWD.Path '.gitignore'
+    $rootGitignore   = Join-Path $RootPath '.gitignore'
+
+    if (Test-Path -LiteralPath $callerGitignore) { $discoveredGitignores += $callerGitignore }
+    if ($callerGitignore -ne $rootGitignore -and (Test-Path -LiteralPath $rootGitignore)) { $discoveredGitignores += $rootGitignore }
+
+    $ignoreRegexes = ConvertTo-IgnoreRegexList -GitignorePaths $discoveredGitignores -ExtraExcludes $ExcludeMask
 
     $stats = [PSCustomObject]@{
-        Processed    = 0
-        Skipped      = 0
-        TooLarge     = 0
-        Binary       = 0
-        Ignored      = 0
-        TotalBytes   = 0
-        LimitReached = $false
-        Output       = ''
+        Processed = 0; Skipped = 0; TooLarge = 0; Binary = 0; Ignored = 0; TotalBytes = 0; LimitReached = $false; Output = ''
     }
-
     $outputParts = [System.Collections.Generic.List[string]]::new()
     $totalChars  = 0
 
-    $allFiles = @(
-        Get-ChildItem -LiteralPath $RootPath -Recurse -File |
-            Sort-Object FullName
-    )
+    $allFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    $dirQueue = [System.Collections.Generic.Queue[string]]::new()
+    $dirQueue.Enqueue($RootPath)
 
-    # Spinner Frame Configurations
+    while ($dirQueue.Count -gt 0) {
+        $currentDir = $dirQueue.Dequeue()
+        # FIX: Extracted exclusive filters to allow dynamic hydration of mixed entities
+        $entities = Get-ChildItem -LiteralPath $currentDir -ErrorAction SilentlyContinue
+        
+        foreach ($entity in $entities) {
+            $relativePath = $entity.FullName.Substring($RootPath.Length + 1).Replace([char]92, [char]47)
+            
+            if ($entity.PSIsContainer) {
+                if (Test-ShouldIgnore -RelativePath ($relativePath + '/') -RegexList $ignoreRegexes) {
+                    Write-Verbose "PRUNED DIRECTORY Tree: $relativePath"
+                    $stats.Ignored++
+                    continue
+                }
+                $dirQueue.Enqueue($entity.FullName)
+            } else {
+                if (Test-ShouldIgnore -RelativePath $relativePath -RegexList $ignoreRegexes) {
+                    $stats.Ignored++; $stats.Skipped++; continue
+                }
+                if (-not (Test-MatchesMask -FileInfo $entity -RelativePath $relativePath -IncludeMask $IncludeMask -ExcludeMask $ExcludeMask)) {
+                    $stats.Skipped++; continue
+                }
+                $allFiles.Add($entity)
+            }
+        }
+    }
+
+    $sortedFiles = $allFiles | Sort-Object FullName
     $spinnerFrames = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
     $frameIndex    = 0
     $isInteractive = [Environment]::UserInteractive
 
-    foreach ($file in $allFiles) {
+    foreach ($file in $sortedFiles) {
         $relativePath = $file.FullName.Substring($RootPath.Length + 1).Replace([char]92, [char]47)
 
-        # Draw UI Spinner safely via StdErr/Host interface to safeguard the stdout pipeline
         if ($isInteractive -and -not $PSBoundParameters.ContainsKey('Verbose')) {
             $frame = $spinnerFrames[$frameIndex++ % $spinnerFrames.Count]
             $statusText = "`r $frame Processing: $relativePath"
@@ -325,51 +326,23 @@ function Invoke-ProjectArtifactCopy {
             [Console]::Write($statusText.PadRight(80).Substring(0, 80))
         }
 
-        # Filter 1: ignore rules
-        if (Test-ShouldIgnore -RelativePath $relativePath -RegexList $ignoreRegexes) {
-            Write-Verbose "IGNORED   : $relativePath"
-            $stats.Ignored++
-            $stats.Skipped++
-            continue
-        }
-
-        # Filter 2: include/exclude masks
-        if (-not (Test-MatchesMask -FileInfo     $file `
-                                   -RelativePath $relativePath `
-                                   -IncludeMask  $IncludeMask `
-                                   -ExcludeMask  $ExcludeMask)) {
-            Write-Verbose "MASK      : $relativePath"
-            $stats.Skipped++
-            continue
-        }
-
-        # Filter 3: individual file size
         if ($file.Length -gt $maxFileBytes) {
             [Console]::Error.WriteLine("`r⚠️ Warning: File too large ($([Math]::Round($file.Length / 1KB, 1)) KB), skipped: $relativePath")
-            $stats.TooLarge++
-            $stats.Skipped++
-            continue
+            $stats.TooLarge++; $stats.Skipped++; continue
         }
 
-        # Filter 4: binary detection
         if (-not (Test-IsTextFile -FileInfo $file -CheckBytes $NullByteCheckBytes)) {
             Write-Verbose "BINARY    : $relativePath"
-            $stats.Binary++
-            $stats.Skipped++
-            continue
+            $stats.Binary++; $stats.Skipped++; continue
         }
 
-        # Read content
         try {
             $content = [System.IO.File]::ReadAllText($file.FullName, $encodingObj)
-        }
-        catch {
+        } catch {
             [Console]::Error.WriteLine("`r⚠️ Warning: Failed to read '$relativePath': $_")
-            $stats.Skipped++
-            continue
+            $stats.Skipped++; continue
         }
 
-        # Filter 5: cumulative size limit
         $entryLength = $relativePath.Length + $content.Length + 20
         if (($totalChars + $entryLength) -gt $maxTotalBytes) {
             [Console]::Error.WriteLine("`r⚠️ Warning: Total limit of $MaxTotalSizeKB KB reached. Processing stopped.")
@@ -384,28 +357,23 @@ function Invoke-ProjectArtifactCopy {
         $totalChars       += $entryLength
         $stats.Processed++
         $stats.TotalBytes += $file.Length
-        Write-Verbose "INCLUDED  : $relativePath ($([Math]::Round($file.Length / 1KB, 1)) KB)"
     }
 
-    # Wipe the last spinner trail cleanly
     if ($isInteractive) { [Console]::Write("`r".PadRight(80) + "`r") }
 
     if ($outputParts.Count -gt 0) {
         $finalOutput  = [System.String]::Join([System.Environment]::NewLine, $outputParts)
         $stats.Output = $finalOutput
-
         if ($PSCmdlet.ShouldProcess('Clipboard', 'Write aggregated content')) {
             Set-Clipboard -Value $finalOutput
         }
     }
-
     return $stats
 }
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 if ($MyInvocation.InvocationName -ne '.') {
-
     $invokeParams = @{
         RootPath           = $RootPath
         IncludeMask        = $IncludeMask
@@ -428,12 +396,8 @@ if ($MyInvocation.InvocationName -ne '.') {
         Write-Host ("    Binary files     : {0}"    -f $stats.Binary)     -ForegroundColor DarkYellow
         Write-Host ("    Exceeds size     : {0}"    -f $stats.TooLarge)   -ForegroundColor DarkYellow
         Write-Host ("  Total size         : {0} KB" -f [Math]::Round($stats.TotalBytes / 1KB, 1)) -ForegroundColor Cyan
-
-        if ($stats.LimitReached) {
-            [Console]::Error.WriteLine("`n❌ Error: Output truncated — increase -MaxTotalSizeKB if needed.")
-        }
-    }
-    else {
+        if ($stats.LimitReached) { [Console]::Error.WriteLine("`n❌ Error: Output truncated.") }
+    } else {
         Write-Host 'No text files found matching the given criteria.' -ForegroundColor Yellow
     }
 }
